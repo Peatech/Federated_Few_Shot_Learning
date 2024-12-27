@@ -1,162 +1,158 @@
-"""
-Reproduce Matching Network results of Vinyals et al
-"""
+############################################
+# experiments/matching_nets.py (from scratch)
+############################################
+
 import argparse
-from torch.utils.data import DataLoader
-from torch.optim import Adam
+import torch
 
-from few_shot.datasets import OmniglotDataset, MiniImageNet
-from few_shot.core import NShotTaskSampler, prepare_nshot_task, EvaluateFewShot
-from few_shot.matching import matching_net_episode
-from few_shot.train import fit
-from few_shot.callbacks import *
-from few_shot.utils import setup_dirs
-from config import PATH
+# Because we want a self-contained approach, we define or import our 
+# local/federated logic in the same repo:
+# 
+#  - "few_shot.models" has the MatchingNetwork class
+#  - "federated.fed_trainer" is a script we will create that handles 
+#     server orchestration (FedAVG) and local training (few-shot episodes).
+#  - "config" holds PATH, EPSILON, etc.
+#
+# If you haven't created "fed_trainer" yet, we'll just reference it below as if it exists.
 
-
-setup_dirs() # Execute the setup_dirs() function to create necessary folders for logs and models
-assert torch.cuda.is_available()
-device = torch.device('cuda')
-torch.backends.cudnn.benchmark = True
-
-
-##############
-# Parameters #
-##############
-parser = argparse.ArgumentParser()
-parser.add_argument('--dataset')
-parser.add_argument('--fce', type=lambda x: x.lower()[0] == 't')  # Quick hack to extract boolean
-parser.add_argument('--distance', default='cosine')
-parser.add_argument('--n-train', default=1, type=int)
-parser.add_argument('--n-test', default=1, type=int)
-parser.add_argument('--k-train', default=5, type=int)
-parser.add_argument('--k-test', default=5, type=int)
-parser.add_argument('--q-train', default=15, type=int)
-parser.add_argument('--q-test', default=1, type=int)
-parser.add_argument('--lstm-layers', default=1, type=int)
-parser.add_argument('--unrolling-steps', default=2, type=int)
-args = parser.parse_args()
-
-evaluation_episodes = 1000
-episodes_per_epoch = 100
-
-if args.dataset == 'omniglot':
-    n_epochs = 100
-    dataset_class = OmniglotDataset
-    num_input_channels = 1
-    lstm_input_size = 64
-elif args.dataset == 'miniImageNet':
-    n_epochs = 200
-    dataset_class = MiniImageNet
-    num_input_channels = 3
-    lstm_input_size = 1600
-else:
-    raise(ValueError, 'Unsupported dataset')
-
-param_str = f'{args.dataset}_n={args.n_train}_k={args.k_train}_q={args.q_train}_' \
-            f'nv={args.n_test}_kv={args.k_test}_qv={args.q_test}_'\
-            f'dist={args.distance}_fce={args.fce}'
-
-
-#########
-# Model #
-#########
+from config import PATH, EPSILON
 from few_shot.models import MatchingNetwork
-# The Matching Network model is initialized with:n-shot, k-way, and q-queries for training tasks.
-model = MatchingNetwork(args.n_train, args.k_train, args.q_train, args.fce, num_input_channels,
-                        lstm_layers=args.lstm_layers,
-                        lstm_input_size=lstm_input_size,
-                        unrolling_steps=args.unrolling_steps,
-                        device=device)
-model.to(device, dtype=torch.double)
+# from federated.fed_trainer import run_federated_few_shot  # We'll demonstrate how you'd call it.
 
+def build_parser():
+    """
+    Merges few-shot hyperparameters with 'federated' hyperparameters in a single parser.
+    This is inspired by the old 'options.py' for federated plus the old arguments in 
+    'experiments/matching_nets.py' for few-shot.
 
-###################
-# Create datasets #
-###################
-# dataset_class('background') initializes the dataset (either Omniglot or MiniImageNet) in "background" mode, meaning it will load the background (training) split of the dataset.
-background = dataset_class('background')
+    You can expand or modify these as needed.
+    """
+    parser = argparse.ArgumentParser(description="Federated Few-Shot Training with Matching Networks")
 
-"""
-Creates a DataLoader for the training dataset (background) that generates n-shot tasks
-(episodes) using the NShotTaskSampler. 
-NShotTaskSampler: A custom sampler that generates batches tailored for n-shot learning.
-It creates tasks (episodes) with: n-shot: Number of support examples per class.
-k-way: Number of unique classes per task.
-q -query: Number of query examples per class.
-num_workers=4: Number of worker threads for data loading.
-"""
-background_taskloader = DataLoader(
-    background,
-    batch_sampler=NShotTaskSampler(background, episodes_per_epoch, args.n_train, args.k_train, args.q_train),
-    num_workers=4
-)
-evaluation = dataset_class('evaluation') # load the evaluation (test) split of the dataset
-evaluation_taskloader = DataLoader(
-    evaluation,
-    batch_sampler=NShotTaskSampler(evaluation, episodes_per_epoch, args.n_test, args.k_test, args.q_test),
-    num_workers=4
-)
+    # --------------------------------------------------------------------
+    # Federated arguments (inspired by your original fed scripts)
+    # --------------------------------------------------------------------
+    parser.add_argument('--epochs', type=int, default=10,
+                        help="Number of global training rounds")
+    parser.add_argument('--num_users', type=int, default=5,
+                        help="Number of total clients (users)")
+    parser.add_argument('--frac', type=float, default=0.1,
+                        help='Fraction of clients selected each round')
+    parser.add_argument('--local_ep', type=int, default=3,
+                        help="Number of local epochs per client update")
+    parser.add_argument('--local_bs', type=int, default=10,
+                        help="Local batch size")
+    parser.add_argument('--lr', type=float, default=0.01,
+                        help='Learning rate for local optimizers')
+    parser.add_argument('--momentum', type=float, default=0.5,
+                        help='SGD momentum')
 
+    # Additional model/training options
+    parser.add_argument('--model', type=str, default='matchingnet', 
+                        help='Model type (here it is matchingnet by default)')
+    parser.add_argument('--iid', type=int, default=0,
+                        help='Whether data distribution is IID (1) or not (0)')
 
-############
-# Training #
-############
-print(f'Training Matching Network on {args.dataset}...')
-optimiser = Adam(model.parameters(), lr=1e-3)
-loss_fn = torch.nn.NLLLoss().cuda()
+    # GPU
+    parser.add_argument('--gpu', type=int, default=None, 
+                        help='Which GPU to use. None for CPU')
 
+    # --------------------------------------------------------------------
+    # Few-Shot arguments
+    # --------------------------------------------------------------------
+    parser.add_argument('--fce', type=lambda x: x.lower()[0] == 't', default=True,
+                        help='Use fully conditional embeddings (FCE)?')
+    parser.add_argument('--distance', default='cosine',
+                        help='Distance metric for the Matching Network: "cosine", "l2", or "dot"')
+    parser.add_argument('--n_train', default=1, type=int,
+                        help='Number of support examples per class (n) for training tasks')
+    parser.add_argument('--n_test', default=1, type=int,
+                        help='Number of support examples per class (n) for test tasks')
+    parser.add_argument('--k_train', default=5, type=int,
+                        help='Number of classes (k) in each training episode')
+    parser.add_argument('--k_test', default=5, type=int,
+                        help='Number of classes (k) in each test episode')
+    parser.add_argument('--q_train', default=15, type=int,
+                        help='Number of query samples per class for training tasks')
+    parser.add_argument('--q_test', default=1, type=int,
+                        help='Number of query samples per class for test tasks')
+    parser.add_argument('--lstm_layers', default=1, type=int,
+                        help='Number of LSTM layers if using FCE')
+    parser.add_argument('--unrolling_steps', default=2, type=int,
+                        help='Unrolling steps in the Attentional LSTM for FCE')
 
-"""
-The callbacks list contains utility functions that are executed during the training process 
-to monitor performance, save the model, adjust the learning rate, and log results.
+    # Dataset selection (omniglot, miniImageNet, etc.)
+    parser.add_argument('--dataset', type=str, default='omniglot', 
+                        help='Which dataset to use in the few-shot tasks')
 
-EvaluateFewShot: Periodically evaluates the model on a specified number of few-shot learning tasks (episodes) during training.
-Computes accuracy on these tasks to measure how well the model is generalizing to unseen tasks.
+    return parser
 
-ModelCheckpoint: Saves the model’s parameters to disk when it achieves the best validation performance. 
-Ensures that the best-performing model during training is saved for later use.
+def main():
+    """
+    Main entry point for federated few-shot learning with Matching Networks.
+    This script:
+      1) Parses arguments
+      2) Creates the Matching Network model as a "global model"
+      3) Hands control to a future "fed_trainer" to orchestrate training
+    """
+    parser = build_parser()
+    args = parser.parse_args()
 
-ReduceLROnPlateau: Dynamically adjusts the learning rate during training to prevent stagnation. patience=20: The number of epochs to wait for an improvement in the monitored metric before reducing the learning rate.
-factor=0.5: Multiplier to reduce the learning rate. Helps the optimizer converge more effectively by lowering the learning rate when performance plateaus.
+    # Device selection. 
+    device = 'cuda' if args.gpu is not None and torch.cuda.is_available() else 'cpu'
+    print(f"[INFO] Using device: {device}")
 
-CSVLogger: Logs training and validation metrics to a CSV file for later analysis.
-"""
-callbacks = [
-    EvaluateFewShot(
-        eval_fn=matching_net_episode,
-        num_tasks=evaluation_episodes,
-        n_shot=args.n_test,
-        k_way=args.k_test,
-        q_queries=args.q_test,
-        taskloader=evaluation_taskloader,
-        prepare_batch=prepare_nshot_task(args.n_test, args.k_test, args.q_test),
+    # Decide dataset-based hyperparams for the Matching Network
+    if args.dataset.lower() == 'omniglot':
+        num_input_channels = 1
+        lstm_input_size = 64
+    elif args.dataset.lower() == 'miniimagenet':
+        num_input_channels = 3
+        lstm_input_size = 1600
+    else:
+        raise ValueError("Unsupported dataset. Choose 'omniglot' or 'miniImageNet'")
+
+    # Build the Matching Network
+    global_model = MatchingNetwork(
+        n=args.n_train,
+        k=args.k_train,
+        q=args.q_train,
         fce=args.fce,
-        distance=args.distance
-    ),
-    ModelCheckpoint(
-        filepath=PATH + f'/models/matching_nets/{param_str}.pth',
-        monitor=f'val_{args.n_test}-shot_{args.k_test}-way_acc',
-        # monitor=f'val_loss',
-    ),
-    ReduceLROnPlateau(patience=20, factor=0.5, monitor=f'val_{args.n_test}-shot_{args.k_test}-way_acc'),
-    CSVLogger(PATH + f'/logs/matching_nets/{param_str}.csv'),
-]
+        num_input_channels=num_input_channels,
+        lstm_layers=args.lstm_layers,
+        lstm_input_size=lstm_input_size,
+        unrolling_steps=args.unrolling_steps,
+        device=device
+    ).to(device, dtype=torch.double)
 
-"""
-The fit function is the central loop for training the Matching Network. It orchestrates the model's training process, 
-integrating the data loader, loss computation, gradient updates, and callback execution. 
-"""
-fit(
-    model,
-    optimiser,
-    loss_fn,
-    epochs=n_epochs,
-    dataloader=background_taskloader,
-    prepare_batch=prepare_nshot_task(args.n_train, args.k_train, args.q_train),
-    callbacks=callbacks,
-    metrics=['categorical_accuracy'],
-    fit_function=matching_net_episode,
-    fit_function_kwargs={'n_shot': args.n_train, 'k_way': args.k_train, 'q_queries': args.q_train, 'train': True,
-                         'fce': args.fce, 'distance': args.distance}
-)
+    # Log a bit of info
+    print("===============================================")
+    print("[INFO] Created Matching Network with config:")
+    print(f"       fce={args.fce}, distance={args.distance}")
+    print(f"       n_train={args.n_train}, k_train={args.k_train}, q_train={args.q_train}")
+    print(f"       lstm_layers={args.lstm_layers}, unrolling_steps={args.unrolling_steps}")
+    print(f"       Dataset: {args.dataset}")
+    print("===============================================")
+
+    # THIS is where a typical FedAVG main script orchestrates data loading, client splits, etc.
+    # Since we're building from scratch, let's just call a function that you'd create 
+    # in your new "fed_trainer.py". For example:
+
+    # from federated.fed_trainer import run_federated_few_shot
+    # run_federated_few_shot(args, global_model)
+    #
+    # The run_federated_few_shot function would:
+    #   1) Load the dataset(s) and produce local splits (iid or non-iid).
+    #   2) For each round in 1..args.epochs:
+    #       a) select fraction of users
+    #       b) each user does local few-shot training 
+    #          (possibly using "matching_net_episode" from few_shot.matching)
+    #       c) server aggregates
+    #   3) Evaluate global_model, etc.
+    
+    print("[INFO] Done initializing. In a real system, now we would call the federated trainer.")
+    # E.g.:
+    # run_federated_few_shot(args, global_model)
+
+if __name__ == '__main__':
+    main()
