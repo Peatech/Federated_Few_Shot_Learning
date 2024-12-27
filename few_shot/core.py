@@ -5,7 +5,7 @@ from torch.utils.data import Sampler
 from typing import List, Iterable, Callable, Tuple
 import numpy as np
 
-from few_shot.metrics import categorical_accuracy
+#from few_shot.metrics import categorical_accuracy
 from few_shot.callbacks import Callback
 
 class NShotTaskSampler(Sampler):
