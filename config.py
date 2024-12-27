@@ -3,7 +3,7 @@ import os
 
 PATH = os.path.dirname(os.path.realpath(__file__))
 
-DATA_PATH = "/kaggle/working/Few-shot-Learning/Omniglot"
+DATA_PATH = "/kaggle/working/Federated_Few_Shot_Learning/Omniglot"
 
 EPSILON = 1e-8
 
