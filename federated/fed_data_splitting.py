@@ -1,66 +1,87 @@
-###############################################
+##############################################################
 # federated/fed_data_splitting.py
-# Provides get_user_groups(...) with IID or non-IID.
-###############################################
+# Provides a get_user_groups() function for IID or non-IID splits
+##############################################################
 import numpy as np
 
-def get_user_groups_iid(dataset, num_users):
-    """Simple IID splitting: each user gets an equal chunk."""
-    num_items = len(dataset) // num_users
-    all_idxs = np.arange(len(dataset))
-    np.random.shuffle(all_idxs)
+def get_user_groups(dataset, num_users, iid=True):
+    """
+    Splits the dataset among `num_users` clients. 
+    If iid=True => random equal-chunk splits (IID).
+    If iid=False => label-based shard approach using dataset.df['class_id'].
 
+    # Arguments
+        dataset: A Dataset object with a .df DataFrame containing at least 'class_id' column
+        num_users: How many clients to split among
+        iid: Boolean indicating whether to do IID or non-IID splits
+    # Returns
+        user_groups: dict -> {user_id: array of dataset indices}
+    """
+    if iid:
+        return _iid_split(dataset, num_users)
+    else:
+        return _label_based_shard_split(dataset, num_users)
+
+
+def _iid_split(dataset, num_users):
+    """Simple random equal-chunk IID splitting."""
+    all_indices = np.arange(len(dataset))
+    np.random.shuffle(all_indices)
+
+    num_items = len(dataset) // num_users
     user_groups = {}
+
     start = 0
-    for user_id in range(num_users):
-        user_groups[user_id] = all_idxs[start:start + num_items]
+    for uid in range(num_users):
+        user_groups[uid] = all_indices[start : start + num_items]
         start += num_items
 
     return user_groups
 
-def get_user_groups_noniid(dataset, num_users):
-    """
-    Example non-IID approach.
-    For Omniglot or miniImageNet, we might do something
-    similar to your old sampling strategy: cluster by class_id,
-    shard, etc.
-    We'll do a simple approach: each user gets examples from fewer classes.
-    """
 
-    # Extract labels from dataset
-    # For example, OmniglotDataset and MiniImageNet store label in df['class_id']
+def _label_based_shard_split(dataset, num_users):
+    """
+    Non-IID approach: We partition data by label shards.
+    This uses dataset.df['class_id'] for label-based splits.
+    Each user gets shards of sorted label indices, 
+    so data is concentrated in fewer classes per user.
+
+    # Implementation details:
+    # - Suppose we want 2 shards per user => total_shards = num_users * 2
+    # - Sort the entire dataset by label => 'class_id'
+    # - Assign consecutive shards to each user
+    """
     df = dataset.df
-    labels = df['class_id'].values
+    labels = df['class_id'].values  # array of shape [len(dataset)]
     all_idxs = np.arange(len(df))
 
-    # Sort by label
-    idxs_labels = np.vstack((all_idxs, labels))
-    idxs_labels = idxs_labels[:, idxs_labels[1,:].argsort()]
-    sorted_idxs = idxs_labels[0,:]
+    # Sort indices by class_id
+    sorted_idxs = all_idxs[np.argsort(labels)]
 
-    # Let's say we create 'num_shards = num_users * 2' shards, each shard has data from ~1-2 classes
-    num_shards = num_users * 2
-    shard_size = len(dataset) // num_shards
-    idx_shard = [i for i in range(num_shards)]
-    user_groups = {i: np.array([], dtype=int) for i in range(num_users)}
+    # We'll define #shards as num_users * 2 (for example)
+    # You can also make this dynamic or pass as an argument
+    shards_per_user = 2
+    total_shards = num_users * shards_per_user
+    shard_size = len(dataset) // total_shards
 
-    for user_id in range(num_users):
-        # pick 2 shards for each user, for instance
-        num_shards_per_user = 2
-        rand_set = set(np.random.choice(idx_shard, num_shards_per_user, replace=False))
-        idx_shard = list(set(idx_shard) - rand_set)
+    # Create list of shard IDs
+    idx_shard = list(range(total_shards))
 
-        for r in rand_set:
-            user_groups[user_id] = np.concatenate(
-                (user_groups[user_id], 
-                 sorted_idxs[r*shard_size : (r+1)*shard_size]),
+    user_groups = {uid: np.array([], dtype=int) for uid in range(num_users)}
+
+    for uid in range(num_users):
+        # pick shards_per_user shards for this user
+        chosen = set(np.random.choice(idx_shard, shards_per_user, replace=False))
+        # remove them from the shard pool
+        idx_shard = list(set(idx_shard) - chosen)
+
+        # for each shard, assign those indices
+        for shard_id in chosen:
+            start = shard_id * shard_size
+            end = (shard_id + 1) * shard_size
+            user_groups[uid] = np.concatenate(
+                [user_groups[uid], sorted_idxs[start:end]],
                 axis=0
             )
-    return user_groups
 
-def get_user_groups(dataset, num_users, iid=True):
-    """Unified entry point: returns user_groups (dict) for IID or non-IID."""
-    if iid:
-        return get_user_groups_iid(dataset, num_users)
-    else:
-        return get_user_groups_noniid(dataset, num_users)
+    return user_groups
