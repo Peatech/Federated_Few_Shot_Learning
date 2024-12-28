@@ -5,9 +5,6 @@ from torch.utils.data import Sampler
 from typing import List, Iterable, Callable, Tuple
 import numpy as np
 
-#from few_shot.metrics import categorical_accuracy
-#from few_shot.callbacks import Callback
-
 class NShotTaskSampler(Sampler):
     def __init__(self,
                  dataset: torch.utils.data.Dataset,
@@ -71,66 +68,6 @@ class NShotTaskSampler(Sampler):
 
             yield np.stack(batch)
 
-class EvaluateFewShot(Callback):
-    """
-    Evaluate a network on an n-shot, k-way classification task after every epoch.
-    In federated learning, you could adapt it to evaluate after each round.
-    """
-    def __init__(self,
-                 eval_fn: Callable,
-                 num_tasks: int,
-                 n_shot: int,
-                 k_way: int,
-                 q_queries: int,
-                 taskloader: torch.utils.data.DataLoader,
-                 prepare_batch: Callable,
-                 prefix: str = 'val_',
-                 **kwargs):
-        super().__init__()
-        self.eval_fn = eval_fn
-        self.num_tasks = num_tasks
-        self.n_shot = n_shot
-        self.k_way = k_way
-        self.q_queries = q_queries
-        self.taskloader = taskloader
-        self.prepare_batch = prepare_batch
-        self.prefix = prefix
-        self.kwargs = kwargs
-        self.metric_name = f'{self.prefix}{self.n_shot}-shot_{self.k_way}-way_acc'
-
-    def on_train_begin(self, logs=None):
-        self.loss_fn = self.params['loss_fn']
-        self.optimiser = self.params['optimiser']
-
-    def on_epoch_end(self, epoch, logs=None):
-        logs = logs or {}
-        seen = 0
-        totals = {'loss': 0, self.metric_name: 0}
-
-        for batch_index, batch in enumerate(self.taskloader):
-            x, y = self.prepare_batch(batch)
-            # Note: If you want to handle CPU clients, replace .cuda() with .to(device)
-            # or unify device. We'll keep this as is for demonstration.
-
-            # evaluate
-            loss, y_pred = self.eval_fn(
-                self.model,
-                self.optimiser,
-                self.loss_fn,
-                x,
-                y,
-                n_shot=self.n_shot,
-                k_way=self.k_way,
-                q_queries=self.q_queries,
-                train=False,
-                **self.kwargs
-            )
-            seen += y_pred.shape[0]
-            totals['loss'] += loss.item() * y_pred.shape[0]
-            totals[self.metric_name] += categorical_accuracy(y, y_pred) * y_pred.shape[0]
-
-        logs[f'{self.prefix}loss'] = totals['loss'] / seen
-        logs[self.metric_name] = totals[self.metric_name] / seen
 
 def prepare_nshot_task(n: int, k: int, q: int, device: torch.device = torch.device('cuda')):
     """
