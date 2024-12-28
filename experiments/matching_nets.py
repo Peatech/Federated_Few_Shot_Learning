@@ -27,8 +27,6 @@ def build_parser():
                         help='Learning rate for local optimizers')
     parser.add_argument('--momentum', type=float, default=0.5,
                         help='SGD momentum')
-    parser.add_argument('--iid', type=int, default=1,
-                        help='1 for IID, 0 for non-IID')
 
     parser.add_argument('--gpu', type=int, default=None,
                         help='GPU ID (None for CPU)')
