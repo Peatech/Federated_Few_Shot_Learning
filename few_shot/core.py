@@ -7,6 +7,15 @@ import numpy as np
 import pandas as pd
 
 
+# few_shot/core.py
+
+import torch
+from torch.utils.data import Sampler, Subset
+import pandas as pd
+import numpy as np
+from typing import List, Iterable, Callable, Tuple
+
+
 class NShotTaskSampler(Sampler):
     def __init__(self,
                  dataset: torch.utils.data.Dataset,
@@ -16,27 +25,50 @@ class NShotTaskSampler(Sampler):
                  q: int = None,
                  num_tasks: int = 1,
                  fixed_tasks: List[Iterable[int]] = None):
-        """PyTorch Sampler subclass for n-shot, k-way, q-query tasks."""
+        """
+        PyTorch Sampler subclass that generates n-shot, k-way, q-query tasks.
+
+        # Arguments
+            dataset: A dataset or subset. Must have a .df attribute 
+                     (if it's a Subset, its .dataset must have a .df).
+            episodes_per_epoch: Number of tasks (episodes) per epoch.
+            n: n-shot (support samples per class)
+            k: k-way (# classes)
+            q: q-query (# query samples per class)
+            num_tasks: How many tasks in each yielded batch.
+            fixed_tasks: Predefined tasks, if any.
+        """
         super(NShotTaskSampler, self).__init__(dataset)
 
-        # Handle Subset datasets
-        if isinstance(dataset, torch.utils.data.Subset):
-            self.dataset_indices = dataset.indices
+        # 1. Unwrap the dataset if it's a Subset
+        self.wrapped_dataset = dataset
+        if isinstance(dataset, Subset):
+            # Subset => unwrap underlying dataset
+            self.dataset = dataset.dataset
+            self.indices = dataset.indices
         else:
-            self.dataset_indices = range(len(dataset))
+            # Not a subset => entire dataset is used
+            self.dataset = dataset
+            self.indices = range(len(dataset))
 
-        self.dataset = dataset
+        # 2. Validate dataset has 'df'
+        if not hasattr(self.dataset, 'df') or not isinstance(self.dataset.df, pd.DataFrame):
+            raise ValueError("The underlying dataset must have a 'df' (pandas.DataFrame).")
+
+        # Basic parameters
         self.episodes_per_epoch = episodes_per_epoch
-        self.num_tasks = num_tasks
-        self.k = k
         self.n = n
+        self.k = k
         self.q = q
+        self.num_tasks = num_tasks
         self.fixed_tasks = fixed_tasks
 
-        if self.k * (self.n + self.q) > len(self.dataset_indices):
-            raise ValueError(f"Dataset is too small for {self.k}-way {self.n}-shot tasks.")
-
         self.i_task = 0
+
+        # Optional check if dataset is large enough for n-shot, k-way, q-query
+        if self.k * (self.n + self.q) > len(self.indices):
+            raise ValueError(f"Not enough data in this subset to sample {self.k}-way "
+                             f"{self.n}-shot tasks. Subset size = {len(self.indices)}.")
 
     def __len__(self):
         return self.episodes_per_epoch
@@ -46,30 +78,37 @@ class NShotTaskSampler(Sampler):
             batch = []
 
             for _ in range(self.num_tasks):
+                # If fixed_tasks is None => random classes
                 if self.fixed_tasks is None:
-                    # Randomly sample k classes
-                    episode_classes = np.random.choice(
-                        self.dataset.df['class_id'].unique(), size=self.k, replace=False
-                    )
+                    # We pick from the underlying dataset's df to get possible classes
+                    unique_classes = self.dataset.df['class_id'].unique()
+                    if len(unique_classes) < self.k:
+                        raise ValueError("Not enough unique classes in this subset to sample k-way tasks.")
+                    episode_classes = np.random.choice(unique_classes, size=self.k, replace=False)
                 else:
-                    # Use fixed tasks
+                    # Use a fixed task
                     episode_classes = self.fixed_tasks[self.i_task % len(self.fixed_tasks)]
                     self.i_task += 1
 
-                df = self.dataset.df[self.dataset.df['class_id'].isin(episode_classes)]
-                support_k = {k: None for k in episode_classes}
+                # df => entire dataset's DataFrame
+                # We only want rows that correspond to our subset's indices
+                # So we filter df by .isin(self.indices)
+                df = self.dataset.df[self.dataset.df.index.isin(self.indices)]
+                df = df[df['class_id'].isin(episode_classes)]
 
-                for k in episode_classes:
-                    support = df[df['class_id'] == k].sample(self.n)
-                    support_k[k] = support
+                support_k = {cls: None for cls in episode_classes}
+                for cls in episode_classes:
+                    # sample n support examples
+                    support = df[df['class_id'] == cls].sample(self.n)
+                    support_k[cls] = support
+                    for _, row in support.iterrows():
+                        batch.append(row['id'])
 
-                    for _, s in support.iterrows():
-                        batch.append(s['id'])
-
-                for k in episode_classes:
-                    query = df[(df['class_id'] == k) & (~df['id'].isin(support_k[k]['id']))].sample(self.q)
-                    for _, q in query.iterrows():
-                        batch.append(q['id'])
+                for cls in episode_classes:
+                    # sample q query examples
+                    query = df[(df['class_id'] == cls) & (~df['id'].isin(support_k[cls]['id']))].sample(self.q)
+                    for _, row in query.iterrows():
+                        batch.append(row['id'])
 
             yield np.stack(batch)
 
