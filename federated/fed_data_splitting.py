@@ -6,8 +6,8 @@ from typing import Dict, List
 
 def get_user_groups(dataset: Dataset, num_users: int) -> Dict[int, List[int]]:
     """
-    Class-based splitting logic for users with additional validation
-    to ensure valid indices are assigned to each user.
+    Splits the dataset into user groups while ensuring each user has enough data
+    to construct NShot tasks.
 
     # Arguments
         dataset: Dataset instance with a 'df' attribute (pandas DataFrame).
@@ -16,7 +16,6 @@ def get_user_groups(dataset: Dataset, num_users: int) -> Dict[int, List[int]]:
     # Returns
         user_groups: Dictionary mapping user_id -> list of valid dataset indices.
     """
-    # Ensure the dataset has a valid DataFrame
     if not hasattr(dataset, 'df') or 'id' not in dataset.df.columns:
         raise ValueError("Dataset must have a DataFrame with an 'id' column.")
 
@@ -33,18 +32,18 @@ def get_user_groups(dataset: Dataset, num_users: int) -> Dict[int, List[int]]:
 
     idx = 0
     for user_id in range(num_users):
-        # Assign classes to users
         num_user_classes = classes_per_user + (1 if user_id < remainder else 0)
         user_classes = unique_classes[idx : idx + num_user_classes]
         idx += num_user_classes
 
-        # Collect indices for all images of these classes
         user_indices = df[df['class_id'].isin(user_classes)]['id'].tolist()
-        user_groups[user_id] = user_indices
 
-        # Validate indices are within dataset length
-        for idx in user_indices:
-            if idx >= len(dataset):
-                raise IndexError(f"Index {idx} out of range for dataset length {len(dataset)}.")
+        # Ensure users have enough data for k-way, n-shot, q-query tasks
+        if len(user_indices) < 10:  # Minimum for 1-way, 1-shot, and 1-query
+            raise ValueError(
+                f"User {user_id} assigned too few samples ({len(user_indices)}) to construct NShot tasks."
+            )
+
+        user_groups[user_id] = user_indices
 
     return user_groups
