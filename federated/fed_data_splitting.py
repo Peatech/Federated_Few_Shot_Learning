@@ -1,5 +1,7 @@
 # federated/fed_data_splitting.py
 
+from typing import Dict, List
+from torch.utils.data import Dataset
 import numpy as np
 
 def get_user_groups(dataset: Dataset, num_users: int, iid: bool = True) -> Dict[int, List[int]]:
