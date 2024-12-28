@@ -2,23 +2,39 @@
 
 import numpy as np
 
-def get_user_groups(dataset, num_users, iid=True):
-    """
-    Splits the dataset among `num_users` clients. 
-    If iid=True => random equal-chunk splits (IID).
-    If iid=False => label-based shard approach using dataset.df['class_id'].
+def get_user_groups(dataset: Dataset, num_users: int, iid: bool = True) -> Dict[int, List[int]]:
+    """Create user groups for Federated Learning.
 
-    # Arguments
-        dataset: A Dataset object with a .df DataFrame containing at least 'class_id' column
-        num_users: Number of federated clients
-        iid: Boolean indicating whether to do IID or non-IID splits
-    # Returns
-        user_groups: dict -> {user_id: array of dataset indices}
+    Args:
+        dataset: Dataset to split.
+        num_users: Number of users to split the dataset into.
+        iid: Whether to create IID or Non-IID splits.
+
+    Returns:
+        user_groups: Dictionary mapping user_id to indices.
     """
+    num_items = len(dataset) // num_users
+    indices = np.arange(len(dataset))
+
     if iid:
-        return _iid_split(dataset, num_users)
+        np.random.shuffle(indices)
+        user_groups = {i: list(indices[i * num_items:(i + 1) * num_items]) for i in range(num_users)}
     else:
-        return _label_based_shard_split(dataset, num_users)
+        labels = dataset.df['class_id'].values if hasattr(dataset, 'df') else None
+        if labels is None:
+            raise ValueError("Dataset must have a 'df' attribute with 'class_id' for non-IID splitting.")
+        
+        sorted_indices = np.argsort(labels)
+        user_groups = {}
+        shards_per_user = len(dataset) // (num_users * 2)
+        for i in range(num_users):
+            shard_indices = np.concatenate([
+                sorted_indices[j * shards_per_user:(j + 1) * shards_per_user]
+                for j in range(i * 2, (i + 1) * 2)
+            ])
+            user_groups[i] = shard_indices.tolist()
+
+    return user_groups
 
 
 def _iid_split(dataset, num_users):
