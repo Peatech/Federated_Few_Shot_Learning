@@ -4,6 +4,7 @@ import torch
 from torch.utils.data import Sampler
 from typing import List, Iterable, Callable, Tuple
 import numpy as np
+import pandas as pd
 
 class NShotTaskSampler(Sampler):
     def __init__(self,
