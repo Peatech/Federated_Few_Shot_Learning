@@ -56,6 +56,8 @@ def build_parser():
                         help='Attentional LSTM unrolling steps')
     parser.add_argument('--dataset', type=str, default='omniglot',
                         help='Which dataset: "omniglot" or "miniimagenet"')
+    parser.add_argument('--eval_episodes', type=int, default=100,
+                    help='Number of episodes to evaluate the model per epoch')
 
     return parser
 
