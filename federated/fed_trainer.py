@@ -54,8 +54,7 @@ def run_federated_few_shot(args, global_model):
     # 2) Split data among clients
     user_groups = get_user_groups(
         dataset=train_dataset,
-        num_users=args.num_users,
-        iid=(args.iid == 1)
+        num_users=args.num_users
     )
 
     ###############################################################
