@@ -30,45 +30,42 @@ class NShotTaskSampler(Sampler):
 
     def __len__(self):
         return self.episodes_per_epoch
-
+    
     def __iter__(self):
+        # Ensure we get the actual dataset if it's a Subset
+        dataset = self.dataset.dataset if isinstance(self.dataset, torch.utils.data.Subset) else self.dataset
+    
         for _ in range(self.episodes_per_epoch):
             batch = []
-
+    
             for task in range(self.num_tasks):
                 if self.fixed_tasks is None:
-                    # random classes
-                    episode_classes = np.random.choice(
-                        self.dataset.df['class_id'].unique(),
-                        size=self.k, replace=False
-                    )
+                    # Get random classes
+                    episode_classes = np.random.choice(dataset.df['class_id'].unique(), size=self.k, replace=False)
                 else:
-                    # use fixed_tasks
+                    # Loop through classes in fixed_tasks
                     episode_classes = self.fixed_tasks[self.i_task % len(self.fixed_tasks)]
                     self.i_task += 1
-
-                df = self.dataset.df[self.dataset.df['class_id'].isin(episode_classes)]
-
-                support_k = {cls: None for cls in episode_classes}
-                for cls in episode_classes:
-                    # Select support
-                    support = df[df['class_id'] == cls].sample(self.n)
-                    support_k[cls] = support
-
+    
+                df = dataset.df[dataset.df['class_id'].isin(episode_classes)]
+    
+                support_k = {k: None for k in episode_classes}
+                for k in episode_classes:
+                    # Select support examples
+                    support = df[df['class_id'] == k].sample(self.n)
+                    support_k[k] = support
+    
                     for i, s in support.iterrows():
                         batch.append(s['id'])
-
-                for cls in episode_classes:
-                    query = df[
-                        (df['class_id'] == cls) &
-                        (~df['id'].isin(support_k[cls]['id']))
-                    ].sample(self.q)
-                    for i, q_ in query.iterrows():
-                        batch.append(q_['id'])
-
+    
+                for k in episode_classes:
+                    query = df[(df['class_id'] == k) & (~df['id'].isin(support_k[k]['id']))].sample(self.q)
+                    for i, q in query.iterrows():
+                        batch.append(q['id'])
+    
             yield np.stack(batch)
-
-
+    
+    
 def prepare_nshot_task(n: int, k: int, q: int, device: torch.device = torch.device('cuda')):
     """
     Returns a function that processes n-shot tasks. 
