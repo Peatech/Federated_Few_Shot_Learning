@@ -30,10 +30,14 @@ class NShotTaskSampler(Sampler):
 
     def __len__(self):
         return self.episodes_per_epoch
-    
+
     def __iter__(self):
         # Ensure we get the actual dataset if it's a Subset
         dataset = self.dataset.dataset if isinstance(self.dataset, torch.utils.data.Subset) else self.dataset
+    
+        # Validate dataset compatibility
+        if not hasattr(dataset, 'df') or not isinstance(dataset.df, pd.DataFrame):
+            raise ValueError("Dataset passed to NShotTaskSampler must have a 'df' attribute of type pandas.DataFrame")
     
         for _ in range(self.episodes_per_epoch):
             batch = []
@@ -64,6 +68,9 @@ class NShotTaskSampler(Sampler):
                         batch.append(q['id'])
     
             yield np.stack(batch)
+    
+        
+    
     
     
 def prepare_nshot_task(n: int, k: int, q: int, device: torch.device = torch.device('cuda')):
