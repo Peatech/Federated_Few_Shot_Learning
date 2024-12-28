@@ -1,11 +1,10 @@
 # few_shot/core.py
 
 import torch
-from torch.utils.data import Sampler
-from typing import List, Iterable, Callable, Tuple
-import numpy as np
+from torch.utils.data import Sampler, Subset  # <-- Add Subset here
 import pandas as pd
-
+import numpy as np
+from typing import List, Iterable, Callable, Tuple
 
 class NShotTaskSampler(Sampler):
     def __init__(self,
