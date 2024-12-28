@@ -31,95 +31,53 @@ raw_omniglot_location = DATA_PATH + '/Omniglot_Raw/'
 prepared_omniglot_location = DATA_PATH + '/Omniglot/'
 output_shape = (28, 28)
 
+# Tracking statistics
+total_classes = 0
+total_samples = 0
 
 def handle_characters(alphabet_folder, character_folder, rotate):
+    global total_samples
     for root, _, character_images in os.walk(character_folder):
         character_name = root.split('/')[-1]
         mkdir(f'{alphabet_folder}.{rotate}/{character_name}')
         for img_path in character_images:
             img = io.imread(root + '/' + img_path)
             img = transform.rotate(img, angle=rotate)
-            
+
             # Convert boolean images to float for resizing
             if img.dtype == bool:
                 img = img_as_float(img)
-            
+
             # Resize the image
             img = transform.resize(img, output_shape, anti_aliasing=img.dtype != bool)
-            
+
             # Normalize the image
             img = (img - img.min()) / (img.max() - img.min())
-            
+
             # Convert to uint8 before saving
             img = img_as_ubyte(img)
-            
+
             # Save the processed image
             io.imsave(f'{alphabet_folder}.{rotate}/{character_name}/{img_path}', img)
 
+            # Increment sample count
+            total_samples += 1
 
-"""
-If the original images_background contains:
-Omniglot/
-    images_background/
-        Alphabet_of_the_Magi/
-            character01/
-                image1.png
-                image2.png
-            character02/
-        Anglo-Saxon_Futhorc/
-            character01/
-            character02/
 
-The processed structure becomes:
-
-Omniglot/
-    images_background/
-        Alphabet_of_the_Magi.0/
-            character01/
-                image1.png
-                image2.png
-            character02/
-        Alphabet_of_the_Magi.90/
-            character01/
-                image1.png
-                image2.png
-            character02/
-        Alphabet_of_the_Magi.180/
-            character01/
-                image1.png
-                image2.png
-            character02/
-        Alphabet_of_the_Magi.270/
-            character01/
-                image1.png
-                image2.png
-            character02/
-        Anglo-Saxon_Futhorc.0/
-            character01/
-            character02/
-        Anglo-Saxon_Futhorc.90/
-            character01/
-            character02/
-        Anglo-Saxon_Futhorc.180/
-            character01/
-            character02/
-        Anglo-Saxon_Futhorc.270/
-            character01/
-            character02/
-        ...
-        By treating rotated alphabets as independent entities, the sampler has a larger pool of classes to create tasks.
-"""
 def handle_alphabet(folder):
+    global total_classes
     print('{}...'.format(folder.split('/')[-1]))
     for rotate in [0, 90, 180, 270]:
         # Create new folders for each augmented alphabet
         mkdir(f'{folder}.{rotate}')
         for root, character_folders, _ in os.walk(folder):
             for character_folder in character_folders:
+                # Increment class count
+                total_classes += 1
+
                 # For each character folder in an alphabet rotate and resize all of the images and save
                 # to the new folder
                 handle_characters(folder, root + '/' + character_folder, rotate)
-                # return
 
     # Delete original alphabet
     rmdir(folder)
@@ -147,3 +105,10 @@ print('Processing evaluation set...')
 for root, alphabets, _ in os.walk(prepared_omniglot_location + 'images_evaluation/'):
     for alphabet in sorted(alphabets):
         handle_alphabet(root + alphabet)
+
+# Print final statistics
+print('Processing complete!')
+print(f'Total classes: {total_classes}')
+print(f'Total samples: {total_samples}')
+print(f'Average samples per class: {total_samples / total_classes:.2f}')
+
