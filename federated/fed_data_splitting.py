@@ -4,53 +4,47 @@ import numpy as np
 from torch.utils.data import Dataset
 from typing import Dict, List
 
-def get_user_groups(dataset: Dataset, num_users: int, **kwargs) -> Dict[int, List[int]]:
+def get_user_groups(dataset: Dataset, num_users: int) -> Dict[int, List[int]]:
     """
-    Class-based splitting logic:
-    
-    We group all images of certain classes to the same user, ensuring that each 
-    user has full coverage of those classes (rather than partial images).
+    Class-based splitting logic for users with additional validation
+    to ensure valid indices are assigned to each user.
 
     # Arguments
-        dataset: An instance of OmniglotDataset or MiniImageNet. Must have:
-                 - df: a pandas.DataFrame with 'class_id' and 'id'
-        num_users: Number of users to split among
+        dataset: Dataset instance with a 'df' attribute (pandas DataFrame).
+        num_users: Number of users to split the data across.
 
     # Returns
-        user_groups: A dict mapping user_id -> list of dataset indices
-                     (i.e. values for dataset's 'id' column).
+        user_groups: Dictionary mapping user_id -> list of valid dataset indices.
     """
-
-    # 1) Extract all classes from dataset.df
-    if not hasattr(dataset, 'df'):
-        raise ValueError("Dataset must have a 'df' attribute (pandas.DataFrame).")
+    # Ensure the dataset has a valid DataFrame
+    if not hasattr(dataset, 'df') or 'id' not in dataset.df.columns:
+        raise ValueError("Dataset must have a DataFrame with an 'id' column.")
 
     df = dataset.df
-    if 'class_id' not in df.columns:
-        raise ValueError("DataFrame must contain a 'class_id' column for class-based splitting.")
 
-    # Unique classes in the entire dataset
+    # Shuffle classes randomly for user splits
     unique_classes = df['class_id'].unique()
     np.random.shuffle(unique_classes)
 
-    # 2) Chunk the classes among the users
-    user_groups = {uid: [] for uid in range(num_users)}
-
-    # How many classes per user (minimum)
-    base_chunk_size = len(unique_classes) // num_users
-    remainder = len(unique_classes) % num_users
+    user_groups = {user_id: [] for user_id in range(num_users)}
+    num_classes = len(unique_classes)
+    classes_per_user = num_classes // num_users
+    remainder = num_classes % num_users
 
     idx = 0
-    for uid in range(num_users):
-        # If there's a remainder, let that user have 1 extra class
-        chunk_size = base_chunk_size + (1 if uid < remainder else 0)
-        subset_classes = unique_classes[idx: idx + chunk_size]
-        idx += chunk_size
+    for user_id in range(num_users):
+        # Assign classes to users
+        num_user_classes = classes_per_user + (1 if user_id < remainder else 0)
+        user_classes = unique_classes[idx : idx + num_user_classes]
+        idx += num_user_classes
 
-        # 3) Gather all 'id' indices from those classes
-        #    For each class in subset_classes, pick all rows from df
-        df_subset = df[df['class_id'].isin(subset_classes)]
-        # user_groups[uid] is a list of dataset indices (the 'id' column)
-        user_groups[uid] = df_subset['id'].tolist()
+        # Collect indices for all images of these classes
+        user_indices = df[df['class_id'].isin(user_classes)]['id'].tolist()
+        user_groups[user_id] = user_indices
+
+        # Validate indices are within dataset length
+        for idx in user_indices:
+            if idx >= len(dataset):
+                raise IndexError(f"Index {idx} out of range for dataset length {len(dataset)}.")
 
     return user_groups
