@@ -176,58 +176,26 @@ class MiniImageNet(Dataset):
         return images
 
 
+# few_shot/datasets.py
+
 class DummyDataset(Dataset):
-    """
-    A synthetic dataset for debugging federated few-shot code. 
-    Each sample has:
-      - 'id': a unique integer index
-      - 'class_id': integer label
-      - plus one or more "features"
-    """
-    def __init__(self, samples_per_class=10, n_classes=5, n_features=3):
-        """
-        # Arguments
-            samples_per_class: how many samples to allocate to each class
-            n_classes: total distinct classes
-            n_features: how many numerical features each sample should have
-        """
-        super().__init__()
+    def __init__(self, samples_per_class=10, n_classes=10, n_features=1):
+        """Dummy dataset for debugging/testing purposes."""
         self.samples_per_class = samples_per_class
         self.n_classes = n_classes
         self.n_features = n_features
 
-        # Create a DataFrame to store metadata
-        data = []
-        idx = 0
-        for class_id in range(self.n_classes):
-            for _ in range(self.samples_per_class):
-                data.append({
-                    'id': idx,
-                    'class_id': class_id
-                })
-                idx += 1
-
-        self.df = pd.DataFrame(data)
-
-        # total samples
-        self.total_samples = len(self.df)
+        # Create a dataframe to be consistent with other Datasets
+        self.df = pd.DataFrame({
+            'class_id': [i % self.n_classes for i in range(len(self))]
+        })
+        self.df = self.df.assign(id=self.df.index.values)
 
     def __len__(self):
-        return self.total_samples
+        return self.samples_per_class * self.n_classes
 
-    def __getitem__(self, idx):
-        """
-        Returns a tuple (features, label).
-        For debugging, we create synthetic features as:
-          [ idx, class_id, plus random floats ]
-        """
-        row = self.df.iloc[idx]
-        label = int(row['class_id'])
-        # We create n_features as random floats for demonstration
-        # plus we store 'idx' to check for overlap
-        features = [float(idx), float(label)]
-        # add random floats
-        features += np.random.randn(self.n_features).tolist()
-        features = torch.tensor(features, dtype=torch.float)
-
-        return features, label
+    def __getitem__(self, item):
+        class_id = item % self.n_classes
+        # Ensure data type is float32
+        data = np.array([item] + [class_id]*self.n_features, dtype=np.float32)
+        return torch.tensor(data), float(class_id)
