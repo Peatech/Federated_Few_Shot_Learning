@@ -176,8 +176,6 @@ class MiniImageNet(Dataset):
         return images
 
 
-# few_shot/datasets.py
-
 class DummyDataset(Dataset):
     def __init__(self, samples_per_class=10, n_classes=10, n_features=1):
         """Dummy dataset for debugging/testing purposes."""
@@ -196,6 +194,5 @@ class DummyDataset(Dataset):
 
     def __getitem__(self, item):
         class_id = item % self.n_classes
-        # Ensure data type is float32
-        data = np.array([item] + [class_id]*self.n_features, dtype=np.float32)
+        data = np.array([item] + [class_id] * self.n_features, dtype=np.float32)
         return torch.tensor(data), float(class_id)
